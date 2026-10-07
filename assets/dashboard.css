@@ -1,0 +1,88 @@
+body {
+    margin: 0;
+    background: #eef2f5;
+    color: #1c2830;
+    font-family: "Segoe UI", sans-serif;
+}
+
+.pagina {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 20px 48px;
+}
+
+.cabecera h1 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    font-weight: 650;
+}
+
+.cabecera p,
+.nota {
+    margin: 0;
+    color: #52616b;
+    line-height: 1.45;
+}
+
+.filtros,
+.kpis,
+.bloque {
+    margin-top: 18px;
+}
+
+.filtros {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+
+.tarjeta,
+.bloque {
+    background: #ffffff;
+    border: 1px solid #d5dee6;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.tarjeta span {
+    display: block;
+    color: #52616b;
+    font-size: 13px;
+}
+
+.tarjeta strong {
+    display: block;
+    margin-top: 6px;
+    font-size: 22px;
+    font-weight: 650;
+}
+
+.bloque h2 {
+    margin: 0 0 4px;
+    font-size: 18px;
+}
+
+.graficos {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.conclusion {
+    margin: 8px 0 0;
+    font-size: 14px;
+}
+
+@media (max-width: 900px) {
+    .filtros,
+    .kpis,
+    .graficos {
+        grid-template-columns: 1fr;
+    }
+}
