@@ -1,220 +1,246 @@
-# De AdventureWorks OLTP al informe de ventas por internet
+# De AdventureWorks al informe de ventas por internet
 
-Documento de la entrega corta. Explica cómo se pasó de la base transaccional a un almacén con esquema en estrella, cómo se cargó con un proceso ETL en Python y cómo ese almacén alimenta el informe de Plotly Dash.
+Este trabajo pasa de la base de AdventureWorks, donde se registran los pedidos, a un informe en Plotly Dash. En medio hay un data warehouse con esquema en estrella y un ETL en Python que lo carga.
 
-## 1. Objeto de la entrega
-
-La pregunta de negocio que cierra esta entrega es:
+La pregunta de la asignatura es:
 
 > ¿Cuál es el importe de las ventas por categoría de producto, territorio y año?
 
-El proceso analizado es la venta de productos por internet. Por eso el informe no usa todo el almacén: usa solo las líneas cuyo pedido tiene `OnlineOrderFlag = 1`.
+El informe se queda con las ventas por internet y enseña el importe en cuatro partes: tiempo, producto, territorio, y la combinación de categoría, territorio y año.
 
-El informe responde, con el importe como medida principal, cuatro bloques:
+No se calcula margen, ni flete, ni impuesto, ni se analizan clientes. Más abajo se explica por qué.
 
-1. Evolución temporal.
-2. Producto.
-3. Territorio del pedido.
-4. Combinación de categoría, territorio y año.
+## Dos totales que no se pueden mezclar
 
-Esta entrega no calcula margen, no reparte flete ni impuesto y no analiza clientes.
+El almacén guarda todas las ventas. El informe solo enseña internet. Los dos números son correctos, pero no responden lo mismo.
 
-## 2. Entorno
+- Todo el almacén: 121.317 líneas y 109.846.381,4250 USD.
+- Solo internet, que es lo que sale en el dashboard: 60.398 líneas y 29.358.677,22 USD.
 
-| Elemento | Valor |
-|---|---|
-| Motor | SQL Server Express, instancia `localhost\SQLEXPRESS` |
-| Autenticación | Windows |
-| Base transaccional | `AdventureWorks2025` |
-| Base analítica | `AdventureWorks_DWH` |
-| ETL | Python, `pyodbc` y Pandas (`etl/load_dwh.py`) |
-| Informe | Plotly Dash (`dashboard.py`) |
+Si en la defensa se citan 109 millones como venta por internet, la cifra está mal.
 
-La base transaccional y la analítica están separadas. Las consultas del informe no leen las tablas normalizadas de ventas. Leen el almacén ya conformado.
+## Cómo está montado
 
-## 3. Qué es el OLTP y por qué no se consulta directamente
+Se trabaja en SQL Server Express, instancia `localhost\SQLEXPRESS`, con autenticación de Windows.
 
-`AdventureWorks2025` es el sistema operacional. Guarda el pedido en el momento en que ocurre y está organizado para registrar transacciones, no para cruzar categorías, territorios y años en un informe.
+- OLTP: `AdventureWorks2025`. Guarda los pedidos tal como se hacen.
+- Data warehouse: `AdventureWorks_DWH`. Guarda los datos ya preparados para analizar.
+- ETL: `etl/load_dwh.py`. Pasa los datos de una base a la otra.
+- Vista de internet: `vw_FactInternetSales`. Se queda solo con el canal internet.
+- Dashboard: `dashboard.py`. Muestra los cuatro bloques.
 
-La línea de venta no vive en una sola tabla. El importe está en `Sales.SalesOrderDetail`. La fecha, el cliente y el territorio están en `Sales.SalesOrderHeader`. El nombre del producto está en `Production.Product`, y la categoría está dos tablas más arriba, en `Production.ProductSubcategory` y `Production.ProductCategory`. El territorio está en `Sales.SalesTerritory`.
+El dashboard no lee el OLTP. Lee el almacén. Así no hay que unir las tablas del pedido cada vez que se mueve un filtro.
+
+## 1. El OLTP
+
+OLTP significa *Online Transaction Processing*. Es la base del día a día. En AdventureWorks está normalizada: cada dato está en su tabla para poder registrar el pedido sin repetir información.
+
+Eso va bien para guardar una venta y mal para un informe, porque una sola línea está partida:
+
+- Unidades, precio, descuento e importe: `Sales.SalesOrderDetail`
+- Fecha, cliente, territorio y número de pedido: `Sales.SalesOrderHeader`
+- Nombre del producto: `Production.Product`
+- Subcategoría: `Production.ProductSubcategory`
+- Categoría: `Production.ProductCategory`
+- Territorio: `Sales.SalesTerritory`
+- Nombre de la persona o de la tienda: `Person.Person` o `Sales.Store`
 
 Antes de cargar nada se comprobó que el origen estaba completo:
 
-| Comprobación | Resultado |
-|---|---|
-| Líneas de `Sales.SalesOrderDetail` | 121.317 |
-| Pedidos de `Sales.SalesOrderHeader` | 31.465 |
-| Clientes de `Sales.Customer` | 19.820 |
-| Clientes con persona | 19.119 |
-| Clientes solo tienda | 701 |
+- Líneas de pedido: 121.317
+- Pedidos: 31.465
+- Clientes: 19.820
+- Clientes con persona: 19.119
+- Clientes que solo son tienda: 701
 
-19.119 + 701 = 19.820. Esas cifras son la referencia del almacén completo. No son las cifras del informe de internet.
+19.119 + 701 = 19.820. Esas cifras son de toda la base, no del informe de internet.
 
-## 4. Decisiones del modelo en estrella
+## 2. El esquema en estrella
 
-El almacén sigue la metodología de Kimball. El grano se fijó antes de crear las tablas:
+El modelo sigue a Kimball. En el centro está `Fact_Sales`, que es la que se suma. Alrededor están las dimensiones: cuándo, qué, quién y dónde.
 
-**una fila de `Fact_Sales` = una fila de `Sales.SalesOrderDetail`.**
+```text
+                 Dim_Date
+                    |
+Dim_Product ---- Fact_Sales ---- Dim_Customer
+                    |
+              Dim_Territory
+```
 
-Ese grano es el que permite sumar importes sin duplicar la línea ni mezclar el flete de la cabecera. `Freight` y `TaxAmt` viven en la cabecera del pedido. Si se copiaran en cada línea, el flete se multiplicaría por el número de productos del pedido. Por eso no entran en el hecho.
+Se creó otra base, `AdventureWorks_DWH`, para no mezclar el informe con las tablas de los pedidos.
 
-### 4.1. Tablas
+### El grano
 
-| Tabla analítica | Papel | Origen |
-|---|---|---|
-| `Dim_Date` | Cuándo se vendió | Se fabrica. No se extrae de una tabla del OLTP |
-| `Dim_Product` | Qué se vendió, con categoría y subcategoría ya unidas | `Product`, `ProductSubcategory`, `ProductCategory` |
-| `Dim_Customer` | Quién compró y si es persona o tienda | `Customer`, `Person`, `Store` |
-| `Dim_Territory` | Dónde se atribuye la venta | Territorio de `SalesOrderHeader` |
-| `Fact_Sales` | Cuánto se vendió | `SalesOrderDetail` + cabecera |
+El grano es lo que significa una fila. Se fijó antes de crear las tablas: una fila de `Fact_Sales` es una línea de `Sales.SalesOrderDetail`.
 
-Las claves `ProductKey`, `CustomerKey` y `TerritoryKey` son subrogadas. Las asigna SQL Server con `IDENTITY`. El proceso Python no las inventa. La clave de negocio se conserva al lado (`ProductAlternateKey`, `CustomerAlternateKey`, `TerritoryAlternateKey`) para poder reconocer el registro del OLTP y para que una segunda carga actualice la dimensión en lugar de duplicarla.
+Si la fila fuera el pedido entero, un pedido con tres productos contaría como uno y se perdería la categoría de cada producto. Con la línea se puede sumar por categoría, por territorio y por año.
 
-`DateKey` no es identidad. Es un entero `AAAAMMDD`, para que la fecha del pedido y la dimensión de tiempo hablen el mismo código.
+Por ese mismo grano se dejaron fuera el flete y el impuesto. `Freight` y `TaxAmt` están en la cabecera del pedido. Si se copiaran en cada línea, un flete de 10 USD en un pedido de cuatro productos contaría como 40. Por eso no están en `Fact_Sales`.
 
-### 4.2. Medidas del hecho
+### Las tablas
 
-| Columna | Significado |
-|---|---|
-| `OrderQty` | Unidades de la línea |
-| `UnitPrice` | Precio unitario |
-| `DiscountPct` | Descuento de la línea (`UnitPriceDiscount`) |
-| `SalesAmount` | Importe de la línea |
+- `Fact_Sales`: importe y unidades. Sale de la línea de detalle, más la fecha, el cliente y el territorio de la cabecera.
+- `Dim_Date`: la fecha. No sale de una tabla del OLTP. Se genera, un día por fila.
+- `Dim_Product`: producto, categoría y subcategoría. Sale de `Product`, `ProductSubcategory` y `ProductCategory`.
+- `Dim_Customer`: persona o tienda. Sale de `Customer`, `Person` y `Store`.
+- `Dim_Territory`: territorio del pedido. Sale de `SalesOrderHeader`.
 
-`SalesAmount` es `LineTotal` guardado como `DECIMAL(19,4)`. La conciliación usa el mismo redondeo en el origen: `CAST(LineTotal AS decimal(19,4))`.
+`Dim_Customer` está cargada, pero este dashboard no la usa. La pregunta no es quién compró.
 
-`SalesOrderDetailID` es único en el hecho. Esa restricción impide cargar dos veces la misma línea.
+### Clave de negocio y clave subrogada
 
-### 4.3. Aspectos que se decidieron a propósito
+Cada producto, cliente y territorio tiene dos claves.
 
-**El territorio es el del pedido.** En el operacional, el cliente tiene un territorio y el pedido tiene otro. El informe de ventas por territorio usa el de `SalesOrderHeader`, porque es el territorio de la operación. Guardarlo dentro del cliente atribuiría la venta a la región actual de la persona.
+La clave de negocio es la del OLTP: `ProductID`, `CustomerID`, `TerritoryID`. En el almacén se guarda como `ProductAlternateKey`, `CustomerAlternateKey` y `TerritoryAlternateKey`. Sirve para saber de qué registro viene y para actualizarlo si cambia el nombre.
 
-**La categoría va dentro del producto.** En el OLTP la jerarquía está normalizada. En el almacén, `Dim_Product` ya trae `CategoryName` y `SubcategoryName`. El informe no necesita volver a unir tres tablas de producto.
+La clave subrogada es un entero nuevo: `ProductKey`, `CustomerKey`, `TerritoryKey`. La crea SQL Server con `IDENTITY(1,1)`. Python no la inventa. `Fact_Sales` guarda esta clave, no la del OLTP. Si más adelante cambia el identificador en AdventureWorks, las ventas viejas siguen apuntando al mismo sitio.
 
-**El calendario se fabrica.** `Dim_Date` cubre desde el primer pedido hasta un año después del último, un día por fila. Incluye año calendario y año fiscal. El año fiscal de AdventureWorks empieza el 1 de julio: de julio a diciembre, el año fiscal es el año calendario más uno. El informe de esta entrega usa `CalendarYear`, porque la pregunta habla de «año» y no de ejercicio fiscal.
+`DateKey` no es un contador. Es la fecha en formato `AAAAMMDD`. El 3 de mayo de 2013 es `20130503`. Así la fecha del pedido y `Dim_Date` usan el mismo número.
 
-**El coste no está en el modelo.** El coste actual del producto cambia con el tiempo. Ponerlo en la dimensión y usarlo como margen histórico daría un margen falso. Esta entrega declara que no calcula rentabilidad.
+### Las medidas
 
-**Los nulos de descripción se sustituyen por «Desconocido».** Un producto sin color o sin subcategoría sigue pudiendo sumarse. No desaparece del informe por un valor nulo.
+- `OrderQty`: unidades de la línea.
+- `UnitPrice`: precio unitario.
+- `DiscountPct`: descuento. En origen se llama `UnitPriceDiscount`.
+- `SalesAmount`: importe de la línea. En origen es `LineTotal`.
 
-## 5. Proceso ETL
+`SalesAmount` es un `DECIMAL(19,4)`. `LineTotal` tiene más decimales, así que en la carga y en la comprobación se redondea con `CAST(LineTotal AS decimal(19,4))`. Si no, las sumas no cuadran por los céntimos.
 
-El script es `etl/load_dwh.py`. El orden no es intercambiable: las dimensiones existen antes que el hecho, porque el hecho guarda sus claves subrogadas.
+`SalesOrderDetailID` es único. Con eso la misma línea no se carga dos veces.
 
-### Paso 1. Extraer ya unido
+### Decisiones del modelo
 
-Los `JOIN` se hacen en SQL Server, en la misma instancia. Pandas no reconstruye la unión de producto, subcategoría y categoría. Recibe el resultado plano y aplica las reglas de limpieza: nulos, textos vacíos y el tipo de cliente.
+El territorio es el del pedido. El cliente tiene un territorio y el pedido tiene otro. Se usó el de `SalesOrderHeader.TerritoryID`, porque la pregunta es dónde se vendió, no dónde está fichado el cliente.
 
-- Producto: `Production.Product` con su subcategoría y su categoría.
-- Cliente: `Sales.Customer` con `Person.Person` o `Sales.Store`. Si hay persona, el tipo es `Person` y el nombre es nombre y apellido. Si no, el tipo es `Store` y el nombre es el de la tienda.
-- Territorio: `Sales.SalesTerritory`, con el nombre, el país y el grupo.
-- Hecho: cada línea de `Sales.SalesOrderDetail` con su cabecera. De la cabecera se toman la fecha, el cliente, el territorio y el número de pedido. El importe que viaja al almacén ya va convertido a `DECIMAL(19,4)`.
+La categoría va dentro del producto. En el OLTP está en otra tabla. En `Dim_Product` ya viene `CategoryName` y `SubcategoryName`. Si falta el color, la subcategoría o la categoría, se pone `Desconocido` para que la línea no desaparezca del informe.
 
-### Paso 2. Fabricar el tiempo
+La fecha se genera. `Dim_Date` va desde el primer pedido hasta un año después del último. Son 1.492 días. Cada fila tiene año, trimestre, mes, nombre del mes y día de la semana.
 
-Python lee la fecha mínima y la máxima de `Sales.SalesOrderHeader` y genera una fila por día. Para cada día calcula año, trimestre, mes, nombre del mes, día de la semana, año fiscal y trimestre fiscal.
+También se calculó el año fiscal. En AdventureWorks empieza el 1 de julio. De julio a diciembre, el año fiscal es el año normal más uno. De enero a junio, coinciden. En el dashboard se usa `CalendarYear`, el año normal, porque la pregunta dice «año». Si se mezclaran los dos, el gráfico diría otra cosa.
 
-### Paso 3. Cargar las dimensiones con `MERGE`
+No se metió el coste. El coste que hay hoy en el producto no es el coste de una venta de hace años. Para el margen haría falta `ProductCostHistory`, el coste de aquella fecha. Como no se hizo, no se habla de rentabilidad.
 
-Cada dimensión pasa por una tabla de etapa (`stg_Date`, `stg_Product`, `stg_Customer`, `stg_Territory`). Después, `MERGE` busca por la clave de negocio:
+## 3. El ETL
 
-- Si el registro ya existe, se actualizan el nombre y los atributos descriptivos. Es un cambio lento de tipo 1: se conserva la clave subrogada y se sustituye la descripción.
-- Si no existe, se inserta y SQL Server asigna la clave subrogada.
+ETL es *Extract, Transform, Load*: sacar los datos, transformarlos y cargarlos. El script es `etl/load_dwh.py`.
 
-### Paso 4. Cargar el hecho
+El orden no da igual. Primero se cargan las dimensiones, porque `Fact_Sales` necesita sus claves. Después se carga `Fact_Sales`.
 
-La etapa del hecho guarda las claves de negocio (`ProductID`, `CustomerID`, `TerritoryID`) y el `DateKey`. El `INSERT` final las cambia por las claves subrogadas mediante unión con las dimensiones. Una línea que no encuentre producto, cliente, territorio o fecha no entra. La conciliación posterior lo detecta, porque el número de filas dejaría de coincidir.
+```text
+OLTP  ->  consulta SQL (ya unida)  ->  Pandas (limpieza)
+      ->  tablas stg_  ->  MERGE a las dimensiones
+      ->  Fact_Sales  ->  comprobación
+```
 
-Antes de insertar, el proceso vacía `Fact_Sales`. Volver a ejecutar el ETL no duplica líneas: deja otra vez el mismo grano.
+### Sacar los datos ya unidos
 
-### Paso 5. Publicar y abortar si no cuadra
+Los `JOIN` se hacen en SQL Server. Pandas no vuelve a unir producto, subcategoría y categoría. Eso lo haría peor y podría duplicar filas.
 
-Si las cifras no coinciden, el script revierte la transacción y no deja una carga a medias. Si coinciden, confirma la carga y publica `vw_Sales`, la vista del almacén completo unida a sus cuatro dimensiones.
+Pandas limpia: los nulos y los textos vacíos pasan a `Desconocido`. También decide el tipo de cliente. Si tiene persona, el tipo es `Person` y el nombre es nombre y apellido. Si no, el tipo es `Store` y el nombre es el de la tienda.
 
-La carga se ejecutó dos veces. La segunda dejó los mismos totales.
+Los importes se convierten a decimal en la consulta. No se pasan por un float de Python, porque se pierden céntimos.
 
-## 6. Conciliación del almacén completo
+### Crear el calendario
 
-| Comprobación | Origen | Destino |
-|---|---|---|
-| Líneas | 121.317 | 121.317 en `Fact_Sales` |
-| Importe a 4 decimales | 109.846.381,4250 | 109.846.381,4250 |
-| Personas en `Dim_Customer` | 19.119 | 19.119 |
-| Tiendas en `Dim_Customer` | 701 | 701 |
-| Productos | — | 504 |
-| Territorios | — | 10 |
-| Fechas | — | 1.492 |
+Se lee la fecha mínima y la máxima de los pedidos y se genera un día por fila, con el año normal y el año fiscal.
 
-Estas cifras demuestran que el almacén reproduce el operacional. No son el total del informe. El operacional mezcla dos canales.
+### Cargar las dimensiones
 
-## 7. Por qué el informe no usa las 121.317 líneas
+Cada dimensión entra primero en una tabla de etapa: `stg_Date`, `stg_Product`, `stg_Customer`, `stg_Territory`. Ahí está el dato preparado, todavía sin ser la dimensión final.
 
-El pedido marca el canal en `Sales.SalesOrderHeader.OnlineOrderFlag`.
+Luego se usa `MERGE`. Busca por la clave de negocio:
 
-| Canal | Líneas | Importe |
-|---|---|---|
-| Internet (`OnlineOrderFlag = 1`) | 60.398 | 29.358.677,2207 |
-| Resto de pedidos | 60.919 | 80.487.704,2043 |
-| Total del hecho | 121.317 | 109.846.381,4250 |
+- Si ya existe, se actualiza el nombre y se deja la misma clave subrogada. Esto es un SCD Tipo 1: se sobreescribe la descripción y las ventas viejas siguen apuntando al mismo registro.
+- Si no existe, se inserta y SQL Server asigna la clave.
 
-`Fact_Sales` conserva los dos canales. La entrega corta crea encima la vista `vw_FactInternetSales`, definida en `sql/07_vista_ventas_internet.sql`. Esa vista devuelve las mismas columnas del hecho, pero solo las líneas de internet. El filtro se hace una vez, en SQL. El informe no vuelve a `SalesOrderHeader` en cada interacción.
+### Cargar Fact_Sales
 
-Hay un matiz que no debe usarse como sustituto de ese filtro. En `Sales.Customer` existen 635 registros con persona y tienda a la vez. El ETL los clasifica como persona porque tienen `PersonID`. Por tanto, `CustomerType` no separa el canal. El canal válido para esta pregunta es `OnlineOrderFlag`.
+En la etapa de `Fact_Sales` todavía están `ProductID`, `CustomerID` y `TerritoryID`. Al insertar en `Fact_Sales` se cambian por `ProductKey`, `CustomerKey` y `TerritoryKey`, uniéndolos con las dimensiones.
 
-En las líneas de internet, `OrderQty` es siempre 1. La suma de unidades y el número de líneas coinciden. El informe muestra líneas e importe, y no presenta las unidades como si fueran otra medida.
+Si una línea no encuentra producto, cliente, territorio o fecha, no entra. Luego se nota, porque no saldrían las 121.317 filas.
 
-## 8. Del almacén al informe
+Antes de insertar se vacía `Fact_Sales`. Por eso se puede ejecutar el ETL otra vez y no se duplican las ventas. Se ejecutó dos veces y los totales salieron iguales.
 
-`dashboard.py` hace una sola consulta al abrir. Une `vw_FactInternetSales` con `Dim_Date`, `Dim_Product` y `Dim_Territory` por las claves subrogadas. El resultado queda en memoria. Los filtros de año, territorio y categoría recortan ese conjunto y recalculan los gráficos. No lanzan de nuevo los cruces del OLTP.
+### Si no cuadra, no se guarda
 
-Al cargar, el programa comprueba el control. Si no hay 60.398 líneas o el importe no es 29.358.677,2207, no arranca. Así un informe mal conectado no se presenta con el total de los dos canales.
+Va todo en una transacción. Si las líneas o el importe no coinciden con el origen, el script hace rollback y no deja la carga a medias. Si coinciden, hace commit y crea `vw_Sales`, que es `Fact_Sales` unida a las cuatro dimensiones.
 
-Se ejecuta con:
+## 4. Comprobar que el almacén está bien
+
+- Líneas: 121.317 en origen y 121.317 en el almacén.
+- Importe: 109.846.381,4250 en los dos lados.
+- Personas: 19.119. Tiendas: 701.
+- Productos: 504. Territorios: 10. Fechas: 1.492.
+
+Con esto se sabe que el almacén copió bien el OLTP. Todavía no es el número de internet, porque aquí van los dos canales.
+
+## 5. Separar internet
+
+El canal está en `Sales.SalesOrderHeader.OnlineOrderFlag`. Si vale 1, el pedido es de internet.
+
+- Internet: 60.398 líneas y 29.358.677,2207 USD.
+- El resto: 60.919 líneas y 80.487.704,2043 USD.
+- Total: 121.317 líneas y 109.846.381,4250 USD.
+
+`Fact_Sales` se queda con los dos. Para el informe se creó la vista `vw_FactInternetSales` (`sql/07_vista_ventas_internet.sql`). Una vista no copia las filas: es una consulta con nombre. Esta devuelve `Fact_Sales` filtrada a internet. El filtro se hace en SQL. El dashboard no vuelve a mirar la cabecera del pedido en cada clic.
+
+```text
+Fact_Sales  +  OnlineOrderFlag = 1  ->  vw_FactInternetSales  ->  dashboard
+```
+
+No se usa `CustomerType` para separar el canal. Hay 635 clientes que tienen persona y tienda a la vez, y el ETL los marca como `Person` porque tienen `PersonID`. El canal válido es `OnlineOrderFlag`.
+
+En internet, `OrderQty` siempre es 1. Las unidades y las líneas dan el mismo número, así que en el dashboard se enseñan líneas e importe, no las unidades como si fueran otra cosa.
+
+## 6. El dashboard
+
+`dashboard.py` al abrirse hace una consulta: une `vw_FactInternetSales` con `Dim_Date`, `Dim_Product` y `Dim_Territory`. Esas 60.398 filas se quedan en memoria. Los filtros recortan eso y actualizan los gráficos. No vuelven al OLTP.
+
+Si no hay 60.398 líneas, o el importe no es 29.358.677,2207 USD, el programa no arranca. Así no se cuela el total de los dos canales.
 
 ```text
 python dashboard.py
 ```
 
-La dirección local es `http://127.0.0.1:8050/`. Sin filtros, la primera tarjeta tiene que mostrar **29.358.677,22 USD**.
+Se abre en `http://127.0.0.1:8050/`. Sin filtros, la primera tarjeta tiene que poner 29.358.677,22 USD.
 
-### 8.1. Los cuatro bloques
+Los filtros de año, territorio y categoría valen para los cuatro bloques. Si se elige un año, la tarjeta ya no enseña el total de control, enseña el de ese año. Para volver al número de control se dejan los filtros vacíos.
 
-**1. Tiempo.** Importe por `CalendarYear` e importe por `MonthName`. El mes se ordena con el número de mes, de enero a diciembre. Si se ordenara por el nombre, abril aparecería antes que enero. El texto bajo los gráficos indica el año de mayor importe y el mes de mayor y menor importe. Sin filtros, el año de mayor importe es 2024 y el mes de mayor importe es mayo.
+### Tiempo
 
-**2. Producto.** Importe por `CategoryName` y los diez productos con mayor `SalesAmount`. La subcategoría está en el modelo y puede filtrarse en una ampliación; en esta entrega no ocupa una página propia.
+Importe por año y por mes. El mes se ordena con el número de mes, no por el nombre. Si se ordenara por el nombre, abril saldría antes que enero.
 
-**3. Territorio.** Importe por `TerritoryName`, el territorio del pedido. Sin filtros, el territorio de mayor importe es Australia.
+Debajo se indica el año de mayor importe y el mes de más y de menos. Sin filtros, el año es 2024 y el mes más alto es mayo.
 
-**4. Categoría, territorio y año.** Una matriz de importe con la categoría en filas y el año en columnas, más una tabla con las quince combinaciones de categoría, territorio y año de mayor importe. Este bloque es la respuesta directa a la pregunta de la asignatura. Los filtros de arriba permiten fijar un territorio o un año y leer la matriz ya recortada.
+### Producto
 
-Los filtros son comunes. Un año elegido cambia a la vez el tiempo, el producto, el territorio y la matriz. El importe de la tarjeta pasa a ser el del filtro, no el de control. Para volver al control hay que dejar los tres filtros vacíos.
+Importe por categoría y los diez productos que más venden. La subcategoría está en la dimensión, pero en este informe no tiene gráfico.
 
-## 9. Qué queda fuera y por qué
+### Territorio
 
-| Pregunta o tema | Decisión en esta entrega |
-|---|---|
-| Margen, coste y rentabilidad | Fuera. No hay coste de la línea en la fecha del pedido |
-| Flete e impuesto | Fuera. Están en la cabecera y duplicarían el importe |
-| Clientes, frecuencia y gasto medio | Fuera de los cuatro bloques. `Dim_Customer` está cargada para el almacén, no para este informe |
-| Crecimiento contra el año anterior y estacionalidad elaborada | Fuera. El bloque de tiempo muestra el importe por año y por mes, que es la base para leerlas, pero no calcula una tasa |
-| Año fiscal | Calculado en `Dim_Date` y no usado en los gráficos, para no mezclar dos calendarios en la misma pregunta |
-| Reventa | Conservada en `Fact_Sales` y excluida de `vw_FactInternetSales` |
+Importe por territorio del pedido. Sin filtros, el más alto es Australia.
 
-## 10. Orden para reproducir la entrega
+### Categoría, territorio y año
 
-1. Comprobar el origen con `sql/01_verificar_oltp.sql`.
-2. Crear el esquema con `sql/02_crear_esquema_estrella.sql`.
-3. Confirmar que el hecho está vacío antes de la primera carga con `sql/03_verificar_dwh_vacio.sql`.
-4. Ejecutar `python etl/load_dwh.py` y repetirlo. Las dos ejecuciones deben dejar 121.317 líneas y 109.846.381,4250 de importe.
-5. Crear la vista de internet con `sql/07_vista_ventas_internet.sql`. El resultado tiene que ser 60.398 líneas y 29.358.677,2207.
-6. Revisar el conjunto con `sql/06_verificacion_final.sql`. Las catorce pruebas del almacén completo tienen que devolver `OK`.
-7. Ejecutar `python dashboard.py` y comprobar la tarjeta de 29.358.677,22 USD sin filtros.
+Esta parte responde la pregunta. La matriz tiene la categoría en filas, el año en columnas y el importe en las celdas. La tabla muestra las 15 combinaciones de categoría, territorio y año con más importe.
 
-## 11. Cifras que deben citarse juntas
+## 7. Lo que quedó fuera
 
-Conviene no mezclarlas en la defensa:
+- Margen y coste: el coste de hoy no sirve para una venta antigua.
+- Flete e impuesto: están en la cabecera y se repetirían en cada línea.
+- Clientes: la dimensión está cargada, pero la pregunta no va de clientes.
+- Crecimiento respecto al año anterior: el gráfico enseña el importe por año. No se calculó el porcentaje.
+- Año fiscal: está en `Dim_Date`, pero los gráficos usan el año normal.
+- El otro canal: sigue en `Fact_Sales`. La vista del dashboard lo quita.
 
-- **121.317 líneas y 109.846.381,4250 USD** demuestran que el ETL cargó todo el operacional.
-- **60.398 líneas y 29.358.677,22 USD** son las ventas por internet y el único total válido del informe.
+## 8. Para volver a hacerlo
 
-El segundo no sustituye al primero. El primero no debe aparecer como respuesta a la pregunta de ventas por internet.
+1. `sql/01_verificar_oltp.sql`
+2. `sql/02_crear_esquema_estrella.sql`
+3. `sql/03_verificar_dwh_vacio.sql` (`Fact_Sales` tiene que estar a 0 antes de la primera carga)
+4. `python etl/load_dwh.py`, y otra vez. Las dos veces: 121.317 líneas y 109.846.381,4250 USD
+5. `sql/07_vista_ventas_internet.sql`. Tiene que dar 60.398 líneas y 29.358.677,2207 USD
+6. `sql/06_verificacion_final.sql`. Las 14 pruebas en OK
+7. `python dashboard.py`. Sin filtros, la tarjeta pone 29.358.677,22 USD
+
+Para cerrar: 121.317 líneas y 109.846.381,4250 USD demuestran que el ETL cargó todo. 60.398 líneas y 29.358.677,22 USD son las ventas por internet y el número del informe.
