@@ -1,3 +1,9 @@
+# Librerias de Python. Instalar con: pip install -r requirements.txt
+#
+# Ademas de esto, el proyecto necesita:
+# - SQL Server Express, instancia localhost\SQLEXPRESS
+# - SQL Server Management Studio, para ejecutar los scripts de sql/
+# - ODBC Driver 17 o 18 for SQL Server, para que pyodbc conecte
 pandas
 pyodbc
 dash

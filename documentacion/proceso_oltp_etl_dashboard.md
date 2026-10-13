@@ -19,6 +19,18 @@ El almacén guarda todas las ventas. El informe solo enseña internet. Los dos n
 
 Si en la defensa se citan 109 millones como venta por internet, la cifra está mal.
 
+## Requisitos
+
+Antes de Python hacen falta tres programas.
+
+**SQL Server Express.** Es el motor de base de datos. La instancia de este trabajo es `localhost\SQLEXPRESS`. Ahí conviven las dos bases: `AdventureWorks2025`, que es el OLTP, y `AdventureWorks_DWH`, que es el almacén. Express es la edición gratuita y con este volumen sobra.
+
+**SQL Server Management Studio.** Es el programa donde se abren los scripts de la carpeta `sql` y se ejecutan con F5: crear las tablas, la vista de internet y las comprobaciones. Sin SSMS se puede usar Azure Data Studio, pero los scripts están pensados para una consulta nueva de Management Studio.
+
+**ODBC.** Es el puente entre Python y SQL Server. Tiene que estar instalado *ODBC Driver 17 for SQL Server* o *ODBC Driver 18 for SQL Server*. La librería `pyodbc` lo usa en el ETL y en el dashboard, con autenticación de Windows. Si ese controlador no está, Python no llega al servidor.
+
+Las librerías de Python están en `requirements.txt`: `pandas`, `pyodbc`, `dash` y `plotly`. Se instalan con `pip install -r requirements.txt`.
+
 ## Cómo está montado
 
 Se trabaja en SQL Server Express, instancia `localhost\SQLEXPRESS`, con autenticación de Windows.
@@ -206,23 +218,37 @@ Se abre en `http://127.0.0.1:8050/`. Sin filtros, la primera tarjeta tiene que p
 
 Los filtros de año, territorio y categoría valen para los cuatro bloques. Si se elige un año, la tarjeta ya no enseña el total de control, enseña el de ese año. Para volver al número de control se dejan los filtros vacíos.
 
+Las capturas de abajo son el dashboard sin ningún filtro.
+
+![Tarjetas del informe](imagenes/tarjetas.png)
+
+Arriba se ve el control de la entrega: 29.358.677,22 USD y 60.398 líneas. El año con más importe es 2024 y el territorio con más importe es Australia.
+
 ### Tiempo
 
-Importe por año y por mes. El mes se ordena con el número de mes, no por el nombre. Si se ordenara por el nombre, abril saldría antes que enero.
+![Importe por año y por mes](imagenes/tiempo.png)
 
-Debajo se indica el año de mayor importe y el mes de más y de menos. Sin filtros, el año es 2024 y el mes más alto es mayo.
+A la izquierda, el importe de cada año. 2024 es el más alto, con 10.781.537,78 USD. A la derecha, el importe de cada mes, ordenado de enero a diciembre y no por el nombre del mes. Mayo es el mes más alto (3.208.299,29 USD) y junio el más bajo (1.851.396,23 USD).
 
 ### Producto
 
-Importe por categoría y los diez productos que más venden. La subcategoría está en la dimensión, pero en este informe no tiene gráfico.
+![Importe por categoría y diez productos](imagenes/producto.png)
+
+Casi todo el importe está en la categoría Bikes. Accessories y Clothing se ven, pero pesan poco al lado. A la derecha, los diez productos con más importe: las variantes de Mountain-200 van por delante y después aparecen las Road-150.
 
 ### Territorio
 
-Importe por territorio del pedido. Sin filtros, el más alto es Australia.
+![Importe por territorio](imagenes/territorio.png)
+
+El territorio es el del pedido. Australia concentra el importe. Detrás van Southwest, Northwest, United Kingdom, Germany, France y Canada. Southeast, Northeast y Central casi no tienen venta por internet, por eso la barra no se aprecia.
 
 ### Categoría, territorio y año
 
-Esta parte responde la pregunta. La matriz tiene la categoría en filas, el año en columnas y el importe en las celdas. La tabla muestra las 15 combinaciones de categoría, territorio y año con más importe.
+![Matriz de categoría y año, y combinaciones](imagenes/decision.png)
+
+La matriz responde la pregunta de la asignatura. En filas está la categoría y en columnas el año. El color oscuro es más importe. La franja de Bikes es la que se ve, y 2024 es el año más oscuro. Accessories y Clothing quedan casi en blanco.
+
+La tabla lista las 15 combinaciones de categoría, territorio y año con más importe. La primera es Bikes, Australia, 2024, con 3.154.931,64 USD. Las siguientes siguen siendo bicicletas: cambia el territorio o el año, no la categoría.
 
 ## 7. Lo que quedó fuera
 

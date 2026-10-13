@@ -343,7 +343,8 @@ def actualizar(anios, territorios, categorias):
         values="SalesAmount",
         aggfunc="sum",
         fill_value=0,
-    ).reset_index()
+    )
+    matriz.columns = matriz.columns.astype(str)
     combinaciones = (
         datos.groupby(["CategoryName", "TerritoryName", "CalendarYear"], as_index=False)["SalesAmount"]
         .sum()
@@ -401,7 +402,7 @@ def actualizar(anios, territorios, categorias):
     )
     figura_matriz = figura_base(
         px.imshow(
-            matriz.set_index("CategoryName"),
+            matriz,
             aspect="auto",
             color_continuous_scale=["#f4f7f8", "#0f4c5c"],
             labels=dict(x="Año", y="Categoría", color="Importe"),
